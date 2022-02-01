@@ -17,11 +17,11 @@ test/launchSequenceTest/DuringLockupPeriodTest.js */
 contract('Access Control: Liquity functions with the caller restricted to Liquity contract(s)', async accounts => {
 
   const [owner, alice, bob, carol] = accounts;
-  const [bountyAddress, lpRewardsAddress, multisig] = accounts.slice(997, 1000)
+  const [bountyAddress, lpRewardsAddress, multisig] = accounts.slice(7, 10)
 
   let coreContracts
 
-  let priceFeed
+  let priceFeedTestnet
   let lusdToken
   let sortedTroves
   let troveManager
@@ -31,6 +31,7 @@ contract('Access Control: Liquity functions with the caller restricted to Liquit
   let defaultPool
   let functionCaller
   let borrowerOperations
+  let hintHelpers
 
   let lqtyStaking
   let lqtyToken
@@ -40,10 +41,10 @@ contract('Access Control: Liquity functions with the caller restricted to Liquit
   before(async () => {
     coreContracts = await deploymentHelper.deployLiquityCore()
     coreContracts.troveManager = await TroveManagerTester.new()
-    coreContracts = await deploymentHelper.deployLUSDTokenTester(coreContracts)
-    const LQTYContracts = await deploymentHelper.deployLQTYTesterContractsHardhat(bountyAddress, lpRewardsAddress, multisig)
+    coreContracts = await deploymentHelper.deployLUSDToken(coreContracts)
+    const LQTYContracts = await deploymentHelper.deployLQTYContractsHardhat(bountyAddress, lpRewardsAddress, multisig)
     
-    priceFeed = coreContracts.priceFeed
+    priceFeedTestnet = coreContracts.priceFeedTestnet
     lusdToken = coreContracts.lusdToken
     sortedTroves = coreContracts.sortedTroves
     troveManager = coreContracts.troveManager
@@ -53,6 +54,9 @@ contract('Access Control: Liquity functions with the caller restricted to Liquit
     defaultPool = coreContracts.defaultPool
     functionCaller = coreContracts.functionCaller
     borrowerOperations = coreContracts.borrowerOperations
+    hintHelpers = coreContracts.hintHelpers
+    console.log(borrowerOperations.address);
+    console.log(hintHelpers.address);
 
     lqtyStaking = LQTYContracts.lqtyStaking
     lqtyToken = LQTYContracts.lqtyToken

@@ -25,25 +25,26 @@ contract TroveManagerTester is TroveManager {
         return _getCompositeDebt(_debt);
     }
 
-    function unprotectedDecayBaseRateFromBorrowing() external returns (uint) {
+    /*function unprotectedDecayBaseRateFromBorrowing() external returns (uint) {
         baseRate = _calcDecayedBaseRate();
         assert(baseRate >= 0 && baseRate <= DECIMAL_PRECISION);
         
         _updateLastFeeOpTime();
         return baseRate;
-    }
+    }*/
 
     function minutesPassedSinceLastFeeOp() external view returns (uint) {
         return _minutesPassedSinceLastFeeOp();
     }
 
+    /*
     function setLastFeeOpTimeToNow() external {
         lastFeeOperationTime = block.timestamp;
     }
 
     function setBaseRate(uint _baseRate) external {
         baseRate = _baseRate;
-    }
+    }*/
 
     function callGetRedemptionFee(uint _ETHDrawn) external view returns (uint) {
         _getRedemptionFee(_ETHDrawn);
@@ -53,8 +54,8 @@ contract TroveManagerTester is TroveManager {
         return _getNetDebt(_debtVal);
     }
 
-    function callInternalRemoveTroveOwner(address _troveOwner) external {
+    /*function callInternalRemoveTroveOwner(address _troveOwner) external {
         uint troveOwnersArrayLength = TroveOwners.length;
         _removeTroveOwner(_troveOwner, troveOwnersArrayLength);
-    }
+    }*/
 }

@@ -22,7 +22,7 @@ contract BorrowerOperations is LiquityBase, Ownable, CheckContract, IBorrowerOpe
 
     address stabilityPoolAddress;
 
-    address gasPoolAddress;
+    address public gasPoolAddress;
 
     ICollSurplusPool collSurplusPool;
 
