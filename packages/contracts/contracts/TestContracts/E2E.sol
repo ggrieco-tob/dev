@@ -6,532 +6,555 @@ import "../BorrowerOperations.sol";
 import "../TroveManager.sol";
 import "../StabilityPool.sol";
 import "../HintHelpers.sol";
+import "../LQTY/LQTYStaking.sol";
 
 contract E2E {
 
-        using SafeMath for uint;
+    using SafeMath for uint;
 
-        address internal bo = 0xbe0037eAf2d64fe5529BCa93c18C9702D3930376;
-        address internal hh = 0x07f96Aa816C1F244CbC6ef114bB2b023Ba54a2EB;
-        address internal ap = address(BorrowerOperations(bo).activePool());
-        address internal dp = address(BorrowerOperations(bo).defaultPool());
-        address internal sp = address(TroveManager(address(BorrowerOperations(bo).troveManager())).stabilityPool());
-        address internal st = address(TroveManager(address(BorrowerOperations(bo).troveManager())).sortedTroves());
-        address internal t =  address(BorrowerOperations(bo).lusdToken());
-        address internal zAddr = address(0);
+    address internal bo = 0xbe0037eAf2d64fe5529BCa93c18C9702D3930376;
+    address internal hh = 0x07f96Aa816C1F244CbC6ef114bB2b023Ba54a2EB;
+    address internal ap = address(BorrowerOperations(bo).activePool());
+    address internal dp = address(BorrowerOperations(bo).defaultPool());
+    address internal sp = address(TroveManager(address(BorrowerOperations(bo).troveManager())).stabilityPool());
+    address internal st = address(TroveManager(address(BorrowerOperations(bo).troveManager())).sortedTroves());
+    address internal t =  address(BorrowerOperations(bo).lusdToken());
+    address internal zAddr = address(0);
 
-        function checkInvariants() internal view {
-            assert(BorrowerOperations(bo).troveManager().getTroveOwnersCount() >= 1 && ISortedTroves(st).getSize() >= 1);
-            assert(ap.balance == IPool(ap).getETH());
-            assert(dp.balance == IPool(dp).getETH());
-            assert(sp.balance == IPool(sp).getETH());
-            assert(t.balance == 0);
-            assert(st.balance == 0);
+    function checkInvariants() internal view {
+        assert(BorrowerOperations(bo).troveManager().getTroveOwnersCount() >= 1 && ISortedTroves(st).getSize() >= 1);
+        assert(ap.balance == IPool(ap).getETH());
+        assert(dp.balance == IPool(dp).getETH());
+        assert(sp.balance == IPool(sp).getETH());
+        assert(t.balance == 0);
+        assert(st.balance == 0);
+    }
+
+    function checkMoreInvariants() public {
+        uint totalSupply = ILUSDToken(t).totalSupply();
+        uint gasPoolBalance = ILUSDToken(t).balanceOf(BorrowerOperations(bo).gasPoolAddress());
+
+        uint activePoolBalance = IPool(ap).getLUSDDebt();
+        uint defaultPoolBalance = IPool(dp).getLUSDDebt();
+        uint totalStakes = TroveManager(address(BorrowerOperations(bo).troveManager())).totalStakes();
+
+        // totalStakes > 0
+        assert(totalStakes > 0);
+        // totalStakes does not exceed activePool + defaultPool
+        assert(totalStakes <= activePoolBalance.add(defaultPoolBalance));
+
+        assert(ILUSDToken(t).balanceOf(address(this)) <= activePoolBalance.add(defaultPoolBalance));
+        assert(totalSupply == activePoolBalance.add(defaultPoolBalance));
+
+        uint stabilityPoolBalance = IStabilityPool(sp).getTotalLUSDDeposits();
+
+        address currentTrove = ISortedTroves(st).getFirst();
+        address nextTrove; 
+
+        uint trovesBalance = 0;
+        while (currentTrove != address(0)) {
+            trovesBalance = trovesBalance.add(ILUSDToken(t).balanceOf(address(currentTrove)));
+            currentTrove = ISortedTroves(st).getNext(currentTrove);
         }
- 
-        function checkMoreInvariants() public {
-            uint totalSupply = ILUSDToken(t).totalSupply();
-            uint gasPoolBalance = ILUSDToken(t).balanceOf(BorrowerOperations(bo).gasPoolAddress());
+        uint lqtyBalance = ILUSDToken(t).balanceOf(BorrowerOperations(bo).lqtyStakingAddress());
+        assert (totalSupply >= stabilityPoolBalance.add(trovesBalance).add(gasPoolBalance).add(lqtyBalance));
 
-            uint activePoolBalance = IPool(ap).getLUSDDebt();
-            uint defaultPoolBalance = IPool(dp).getLUSDDebt();
-            uint totalStakes = TroveManager(address(BorrowerOperations(bo).troveManager())).totalStakes();
+        currentTrove = ISortedTroves(st).getFirst();
+        while (currentTrove != address(0)) {
+            // Status
+            assert (BorrowerOperations(bo).troveManager().getTroveStatus(currentTrove) == uint256(TroveManager.Status.active));
 
-            // totalStakes > 0
-            assert(totalStakes > 0);
-            // totalStakes does not exceed activePool + defaultPool
-            assert(totalStakes <= activePoolBalance.add(defaultPoolBalance));
+            // Minimum debt (gas compensation)
+            assert(BorrowerOperations(bo).troveManager().getTroveDebt(currentTrove) >= BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
 
-            assert(ILUSDToken(t).balanceOf(address(this)) <= activePoolBalance.add(defaultPoolBalance));
-            assert(totalSupply == activePoolBalance.add(defaultPoolBalance));
+            // Stake > 0
+            assert(BorrowerOperations(bo).troveManager().getTroveStake(currentTrove) > 0);
+            currentTrove = ISortedTroves(st).getNext(currentTrove);
+        }
 
-            uint stabilityPoolBalance = IStabilityPool(sp).getTotalLUSDDeposits();
+        currentTrove = ISortedTroves(st).getFirst();
+        nextTrove = ISortedTroves(st).getNext(currentTrove);
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
 
-            address currentTrove = ISortedTroves(st).getFirst();
-            address nextTrove; 
-
-            uint trovesBalance = 0;
-            while (currentTrove != address(0)) {
-                trovesBalance = trovesBalance.add(ILUSDToken(t).balanceOf(address(currentTrove)));
-                currentTrove = ISortedTroves(st).getNext(currentTrove);
-            }
-            uint lqtyBalance = ILUSDToken(t).balanceOf(BorrowerOperations(bo).lqtyStakingAddress());
-            assert (totalSupply >= stabilityPoolBalance.add(trovesBalance).add(gasPoolBalance).add(lqtyBalance));
-
-            currentTrove = ISortedTroves(st).getFirst();
-            while (currentTrove != address(0)) {
-                // Status
-                assert (BorrowerOperations(bo).troveManager().getTroveStatus(currentTrove) == uint256(TroveManager.Status.active));
-
-                // Minimum debt (gas compensation)
-                assert(BorrowerOperations(bo).troveManager().getTroveDebt(currentTrove) >= BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
-
-                // Stake > 0
-                assert(BorrowerOperations(bo).troveManager().getTroveStake(currentTrove) > 0);
-                currentTrove = ISortedTroves(st).getNext(currentTrove);
-            }
-
-            currentTrove = ISortedTroves(st).getFirst();
+        while (currentTrove != address(0) && nextTrove != address(0)) {
+            assert (BorrowerOperations(bo).troveManager().getCurrentICR(nextTrove, price) <= BorrowerOperations(bo).troveManager().getCurrentICR(currentTrove, price));
+            currentTrove = nextTrove;
             nextTrove = ISortedTroves(st).getNext(currentTrove);
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
- 
-            while (currentTrove != address(0) && nextTrove != address(0)) {
-                assert (BorrowerOperations(bo).troveManager().getCurrentICR(nextTrove, price) <= BorrowerOperations(bo).troveManager().getCurrentICR(currentTrove, price));
-                currentTrove = nextTrove;
-                nextTrove = ISortedTroves(st).getNext(currentTrove);
-            }
- 
         }
 
-        function getMinETH(uint ratio) internal returns (uint) {
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint minETH = ratio.mul(BorrowerOperations(bo).LUSD_GAS_COMPENSATION()).div(price);
-            return minETH;
+    }
+
+    function getMinETH(uint ratio) internal returns (uint) {
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint minETH = ratio.mul(BorrowerOperations(bo).LUSD_GAS_COMPENSATION()).div(price);
+        return minETH;
+    }
+
+    function getAdjustedLUSD(uint ETH, uint _LUSDAmount, uint ratio) internal returns (uint) {
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint LUSDAmount = _LUSDAmount;
+        uint compositeDebt = LUSDAmount.add(BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
+        uint ICR = LiquityMath._computeCR(ETH, compositeDebt, price);
+        if (ICR < ratio) {
+            compositeDebt = ETH.mul(price).div(ratio);
+            LUSDAmount = compositeDebt.sub(BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
+        }
+        return LUSDAmount;
+    }
+
+    function openTrove_should_not_revert(uint _LUSDAmount) payable public {
+        checkInvariants();
+        uint256 MIN_NET_DEBT = BorrowerOperations(bo).MIN_NET_DEBT();
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint256 _maxFeePercentage = 1000000000000000000;
+        if (_LUSDAmount <= MIN_NET_DEBT) 
+            _LUSDAmount = MIN_NET_DEBT + 1;
+
+        if (msg.value < getMinETH(BorrowerOperations(bo).CCR())) {
+            // should revert if the ether is not enough
+            try BorrowerOperations(bo).openTrove{value: msg.value}(_maxFeePercentage, _LUSDAmount, zAddr, zAddr) { assert(false); } catch {} 
+            return;
         }
 
-        function getAdjustedLUSD(uint ETH, uint _LUSDAmount, uint ratio) internal returns (uint) {
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint LUSDAmount = _LUSDAmount;
-            uint compositeDebt = LUSDAmount.add(BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
-            uint ICR = LiquityMath._computeCR(ETH, compositeDebt, price);
-            if (ICR < ratio) {
-               compositeDebt = ETH.mul(price).div(ratio);
-               LUSDAmount = compositeDebt.sub(BorrowerOperations(bo).LUSD_GAS_COMPENSATION());
-            }
-            return LUSDAmount;
+        if (BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) != 0)
+            return;
+
+        uint LUSDAmount = getAdjustedLUSD(msg.value, _LUSDAmount, BorrowerOperations(bo).CCR()); 
+        require(LUSDAmount >= MIN_NET_DEBT + 1);
+
+        if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
+            // This will revert sometimes, but we don't have a good specification 
+            return;
         }
 
-	function openTrove_should_not_revert(uint _LUSDAmount) payable public {
-            checkInvariants();
-            uint256 MIN_NET_DEBT = BorrowerOperations(bo).MIN_NET_DEBT();
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint256 _maxFeePercentage = 1000000000000000000;
-            if (_LUSDAmount <= MIN_NET_DEBT) 
-               _LUSDAmount = MIN_NET_DEBT + 1;
+        uint tokensBefore = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
 
-            if (msg.value < getMinETH(BorrowerOperations(bo).CCR())) {
-                // should revert if the ether is not enough
-                try BorrowerOperations(bo).openTrove{value: msg.value}(_maxFeePercentage, _LUSDAmount, zAddr, zAddr) { assert(false); } catch {} 
-		return;
-	    }
+        //(rb,rm) = bo.call{value: msg.value}(abi.encodeWithSignature("openTrove(uint256,address)", LUSDAmount, address(this)));
+        try BorrowerOperations(bo).openTrove{value: msg.value}(_maxFeePercentage, LUSDAmount, zAddr, zAddr) {} catch { assert(false); }
 
-            if (BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) != 0)
+        // post conditions
+        // should be included in sorted troves
+        assert(ISortedTroves(st).contains(address(this)));
+        // should be active
+        assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.active));
+        // owner should receive LUSD
+        assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) == tokensBefore + LUSDAmount);
+        uint colAfter;
+        (,colAfter,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this)); 
+        // should update collateral
+        assert(msg.value == colAfter);
+    }
+
+    function addColl_should_not_revert() payable public {
+        checkInvariants();
+        require(msg.value > 0);
+
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1)) {
+            try BorrowerOperations(bo).addColl{value: msg.value}(zAddr, zAddr) { assert(false); } catch { }
+            return;
+        }
+        
+        uint colBefore;
+        (,colBefore,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
+
+        bool pendingRewardsBefore = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
+
+        // should not revert
+        try BorrowerOperations(bo).addColl{value: msg.value}(zAddr, zAddr) {}
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: An operation that would result in ICR < MCR is not permitted"))
                 return;
+        } catch { assert(false); }
 
-            uint LUSDAmount = getAdjustedLUSD(msg.value, _LUSDAmount, BorrowerOperations(bo).CCR()); 
-            require(LUSDAmount >= MIN_NET_DEBT + 1);
- 
-            if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
-                // This will revert sometimes, but we don't have a good specification 
+        // post conditions
+        // No pending rewards after call
+        bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
+        assert(!pendingRewardsAfter);
+
+        uint colAfter;
+        (,colAfter,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this)); 
+
+        // should update collateral depending on the pending rewards
+        if (!pendingRewardsBefore)
+            assert(colBefore + msg.value == colAfter);
+        else
+            assert(colBefore + msg.value < colAfter);
+    }
+
+    function repayLUSD_should_not_revert() public {
+        checkInvariants(); 
+        uint256 tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        require(tokens > 0);
+
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
+            return; 
+
+        // it should revert with more tokens
+        try BorrowerOperations(bo).repayLUSD(tokens+1, zAddr, zAddr) { assert(false); } catch {}
+
+        // it should not revert with the correct amount of tokens
+        try BorrowerOperations(bo).repayLUSD(tokens, zAddr, zAddr) {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: Trove's net debt must be greater than minimum"))
                 return;
-            }
+        } catch { assert(false); }
 
-            uint tokensBefore = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        // post conditions
+        // it should burn the LUSD from the owner
+        assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) == 0);
 
-            //(rb,rm) = bo.call{value: msg.value}(abi.encodeWithSignature("openTrove(uint256,address)", LUSDAmount, address(this)));
-            try BorrowerOperations(bo).openTrove{value: msg.value}(_maxFeePercentage, LUSDAmount, zAddr, zAddr) {} catch { assert(false); }
+        // No pending rewards after call
+        bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
+        assert(!pendingRewardsAfter);
+    }
 
-            // post conditions
-            // should be included in sorted troves
-            assert(ISortedTroves(st).contains(address(this)));
-            // should be active
-            assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.active));
-            // owner should receive LUSD
-            assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) == tokensBefore + LUSDAmount);
-            uint colAfter;
-            (,colAfter,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this)); 
-            // should update collateral
-            assert(msg.value == colAfter);
-        }
+    function withdrawLUSD_should_not_revert() public {
+        checkInvariants(); 
 
-	function addColl_should_not_revert() payable public {
-            checkInvariants();
-            require(msg.value > 0);
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
+            return; 
 
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1)) {
-                try BorrowerOperations(bo).addColl{value: msg.value}(zAddr, zAddr) { assert(false); } catch { }
-                //(rb,rm) = bo.call{value: msg.value}(abi.encodeWithSignature("addColl(address)", address(this)));
-                //assert(!rb);
-                return;
-            }
-            
-            uint colBefore;
-            (,colBefore,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
+        uint256 price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint256 _maxFeePercentage = 1000000000000000000;
 
-            bool pendingRewardsBefore = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
-
-            // should not revert
-            try BorrowerOperations(bo).addColl{value: msg.value}(zAddr, zAddr) {} catch { assert(false); }
-            //(rb,rm) = bo.call{value: msg.value}(abi.encodeWithSignature("addColl(address)", address(this)));
-            //assert(rb);
-
-            // post conditions
-            // No pending rewards after call
-            bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
-            assert(!pendingRewardsAfter);
-
-            uint colAfter;
-            (,colAfter,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this)); 
-
-            // should update collateral depending on the pending rewards
-            if (!pendingRewardsBefore)
-                assert(colBefore + msg.value == colAfter);
-            else
-                assert(colBefore + msg.value < colAfter);
-        }
-
-	function repayLUSD_should_not_revert() public {
-            checkInvariants(); 
-            uint256 tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-            require(tokens > 0);
-
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-                return; 
-
-            // it should revert with more tokens
-            try BorrowerOperations(bo).repayLUSD(tokens+1, zAddr, zAddr) { assert(false); } catch {}
-            //(rb,rm) = bo.call(abi.encodeWithSignature("repayLUSD(uint256,address)", tokens+1, address(this)));
-            //assert(!rb);
-
-            // it should not revert with the correct amount of tokens
-            try BorrowerOperations(bo).repayLUSD(tokens, zAddr, zAddr) {} catch { assert(false); }
-            //(rb,rm) = bo.call(abi.encodeWithSignature("repayLUSD(uint256,address)", tokens, address(this)));
-            //assert(rb);
-
-            // post conditions
-            // it should burn the LUSD from the owner
-            assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) == 0);
-
-            // No pending rewards after call
-            bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
-            assert(!pendingRewardsAfter);
-        }
-
-	function withdrawLUSD_should_not_revert() public {
-            checkInvariants(); 
-
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-                return; 
-
-            uint256 price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint256 _maxFeePercentage = 1000000000000000000;
- 
-            if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
-                // it should revert in recovery mode
-                try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) { assert(false); } catch {}
-                //(rb,rm) = bo.call(abi.encodeWithSignature("withdrawLUSD(uint256,address)", 1, address(this)));
-                //assert(!rb);
-                return;
-            }
-            uint tokensBefore = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
- 
-            // it should not revert
-            try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) {} catch { assert(false); }
+        if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
+            // it should revert in recovery mode
+            try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) { /*assert(false);*/ } catch {}
             //(rb,rm) = bo.call(abi.encodeWithSignature("withdrawLUSD(uint256,address)", 1, address(this)));
-            //assert(rb);
+            //assert(!rb);
+            return;
+        }
+        uint tokensBefore = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        // add tokensBefore > 0 
+        // it should not revert
+        try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: Caller doesnt have enough LUSD to make repayment"))
+            return;
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: An operation that would result in ICR < MCR is not permitted"))
+            return; 
+        } catch { 
+            assert(false); // this can fail if the price is high?  
+        }
+        // post conditions
+        // token balance should be updated
+        uint tokensAfter = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        assert(tokensBefore + 1 == tokensAfter);
 
-            // post conditions
-            // token balance should be updated
-            uint tokensAfter = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-            assert(tokensBefore + 1 == tokensAfter);
+        // No pending rewards after call
+        bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
+        assert(!pendingRewardsAfter);
+    }
 
-            // No pending rewards after call
-            bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
-            assert(!pendingRewardsAfter);
+    function closeTrove_should_not_revert() public {
+        checkInvariants(); 
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1)) {
+            return;
         }
 
-	function closeTrove_should_not_revert() public {
-            checkInvariants(); 
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1)) {
+        uint256 price = BorrowerOperations(bo).priceFeed().fetchPrice();
+
+        if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
+            try BorrowerOperations(bo).closeTrove() { assert(false); } catch {}
+            return;
+        }
+
+        uint debt = BorrowerOperations(bo).troveManager().getTroveDebt(address(this));
+        uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+
+        if (tokens < debt.sub(BorrowerOperations(bo).LUSD_GAS_COMPENSATION())) {
+            try BorrowerOperations(bo).closeTrove() { assert(false); } catch {} 
+            return;
+        }
+
+        try BorrowerOperations(bo).closeTrove() {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: Caller doesnt have enough LUSD to make repayment"))
                 return;
-            }
+        } catch { assert(false); }  
+        // postconditions
+        uint debtAfter;
+        uint stakeAfter;
 
-            uint256 price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        // debt and stake are zero
+        (debtAfter,,stakeAfter,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
+        assert(debtAfter == 0);
+        assert(stakeAfter == 0);
 
-            if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
-                try BorrowerOperations(bo).closeTrove() { assert(false); } catch {}
-                //(rb,rm) = bo.call(abi.encodeWithSignature("closeTrove()"));
-                // should revert in recovery mode
-                //assert(!rb);
-                return;
-            }
+        // rewards are zero
+        uint rs1;
+        uint rs2;
+        (rs1,rs2) = TroveManager(address(BorrowerOperations(bo).troveManager())).rewardSnapshots(address(this));
+        assert(rs1 == 0);
+        assert(rs2 == 0); 
+        
+        // trove is removed
+        assert(!ISortedTroves(st).contains(address(this)));
 
-            uint debt = BorrowerOperations(bo).troveManager().getTroveDebt(address(this));
-            uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        // trove is closed
+        assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByOwner));
 
-            if (tokens < debt.sub(BorrowerOperations(bo).LUSD_GAS_COMPENSATION())) {
-                try BorrowerOperations(bo).closeTrove() { assert(false); } catch {} 
-                //(rb,rm) = bo.call(abi.encodeWithSignature("closeTrove()"));
-                // should revert
-                //assert(!rb);
-                return;
-            }
+        // No pending rewards after call
+        bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
+        assert(!pendingRewardsAfter);
+    }
 
-            try BorrowerOperations(bo).closeTrove() {} catch { assert(false); }  
-            //(rb,rm) = bo.call(abi.encodeWithSignature("closeTrove()"));
-            // should not revert
-            //assert(rb);
+    function liquidate_should_not_revert() public {
+        checkInvariants(); 
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
+            return;
+
+        require(ISortedTroves(st).getSize() >= 1);
+
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
+    
+        if (ICR < TroveManager(address(BorrowerOperations(bo).troveManager())).MCR()) {
+            try BorrowerOperations(bo).troveManager().liquidate(address(this)) {} 
+            catch Error (string memory err) {
+                if (keccak256(bytes(err)) == keccak256("TroveManager: nothing to liquidate"))
+                    return;
+            } catch { assert(false); }
 
             // postconditions
+            // same as closing a trove
             uint debtAfter;
             uint stakeAfter;
-
-            // debt and stake are zero
             (debtAfter,,stakeAfter,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
             assert(debtAfter == 0);
             assert(stakeAfter == 0);
 
-            // rewards are zero
             uint rs1;
             uint rs2;
             (rs1,rs2) = TroveManager(address(BorrowerOperations(bo).troveManager())).rewardSnapshots(address(this));
             assert(rs1 == 0);
             assert(rs2 == 0); 
-         
-            // trove is removed
+        
             assert(!ISortedTroves(st).contains(address(this)));
-
-            // trove is closed
-            assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByOwner));
-
-            // No pending rewards after call
-            bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
-            assert(!pendingRewardsAfter);
+            assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByLiquidation));
         }
+    }
 
-	function liquidate_should_not_revert() public {
-            checkInvariants(); 
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-                return;
+function liquidateTroves_should_not_revert(uint n) public {
+        checkInvariants(); 
+        //if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
+        //    return; 
 
-            require(ISortedTroves(st).getSize() >= 1);
+        require(ISortedTroves(st).getSize() >= 1);
 
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
+    
+        if (ICR < TroveManager(address(BorrowerOperations(bo).troveManager())).MCR()) {
+            try BorrowerOperations(bo).troveManager().liquidateTroves(n) {} 
+                catch Error (string memory err) {
+                if (keccak256(bytes(err)) == keccak256("TroveManager: nothing to liquidate"))
+                    return;
+                } catch { assert(false); } 
+        }
+    }
+
+    function batchLiquidateTroves_should_not_revert() public {
+        checkInvariants();
+        require(ISortedTroves(st).getSize() > 0);
+        address[] memory borrowers = new address[](1);
+        borrowers[0] = address(this);
+
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
+        uint MCR = TroveManager(address(BorrowerOperations(bo).troveManager())).MCR(); 
+
+        if (ICR < MCR) {
+
+            try BorrowerOperations(bo).troveManager().batchLiquidateTroves(borrowers) {} 
+            catch Error (string memory err) {
+                if (keccak256(bytes(err)) == keccak256("TroveManager: nothing to liquidate"))
+                    return;
+            } catch { assert(false); }
+            // postconditions
+            uint debtAfter;
+            uint stakeAfter;
+            (debtAfter,,stakeAfter,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
+            assert(debtAfter == 0);
+            assert(stakeAfter == 0);
+
+            uint rs1;
+            uint rs2;
+            (rs1,rs2) = TroveManager(address(BorrowerOperations(bo).troveManager())).rewardSnapshots(address(this));
+            assert(rs1 == 0);
+            assert(rs2 == 0); 
         
-           //assert(rb);
-            if (ICR < TroveManager(address(BorrowerOperations(bo).troveManager())).MCR()) {
-                try BorrowerOperations(bo).troveManager().liquidate(address(this)) {} catch { assert(false); }
- 
-                // postconditions
-                // same as closing a trove
-                uint debtAfter;
-                uint stakeAfter;
-                (debtAfter,,stakeAfter,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
-                assert(debtAfter == 0);
-                assert(stakeAfter == 0);
-
-                uint rs1;
-                uint rs2;
-                (rs1,rs2) = TroveManager(address(BorrowerOperations(bo).troveManager())).rewardSnapshots(address(this));
-                assert(rs1 == 0);
-                assert(rs2 == 0); 
-         
-                assert(!ISortedTroves(st).contains(address(this)));
-                assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByLiquidation));
-            }
+            assert(!ISortedTroves(st).contains(address(this)));
+            assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByLiquidation));
         }
+    }
 
-	function liquidateTroves_should_not_revert(uint n) public {
-            checkInvariants(); 
-            //if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-            //    return; 
+    function stake_should_not_revert() public {
+        uint tokens = TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyToken().balanceOf(address(this));
+        uint staked_old = LQTYStaking(payable(address(TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking()))).stakes(address(this));
+        require(tokens > 0);
+        try TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking().stake(tokens) {} catch { assert(false); }
+        uint staked_new = LQTYStaking(payable(address(TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking()))).stakes(address(this));
+        assert(tokens + staked_old == staked_new);
+    } 
 
-            require(ISortedTroves(st).getSize() >= 1);
+    function unstake_should_not_revert() public {
+        uint staked_old = LQTYStaking(payable(address(TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking()))).stakes(address(this));
+        require(staked_old > 0);
+        try TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking().unstake(staked_old) {} catch { assert(false); }
+        uint staked_new = LQTYStaking(payable(address(TroveManager(address(BorrowerOperations(bo).troveManager())).lqtyStaking()))).stakes(address(this));
+        assert(staked_new == 0);
+    }
 
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
+    function provideToSP_should_not_revert() public {
+        checkInvariants(); 
+
+        uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        require(tokens > 0);
         
-           //assert(rb);
-            if (ICR < TroveManager(address(BorrowerOperations(bo).troveManager())).MCR()) {
-                try BorrowerOperations(bo).troveManager().liquidateTroves(n) {} catch { assert(false); } 
-            }
-            //(rb,rm) = address(BorrowerOperations(bo).troveManager()).call(abi.encodeWithSignature("liquidateTroves(uint256)", n));
-            // it should not revert
-            //assert(rb);
+        bool registered = false;
+        (, registered) = StabilityPool(payable(sp)).frontEnds(address(this));
+
+        if (registered) {
+            // it should revert if caller is registered
+            try StabilityPool(payable(sp)).provideToSP(tokens, zAddr) { assert(false); } catch {}
+            return;
         }
 
-        function batchLiquidateTroves_should_not_revert() public {
-            checkInvariants();
-            require(ISortedTroves(st).getSize() > 0);
-            address[] memory borrowers = new address[](1);
-            borrowers[0] = address(this);
+        // it should revert with more tokens than expected
+        try StabilityPool(payable(sp)).provideToSP(tokens+1, zAddr) { assert(false); } catch {}
 
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
-            uint MCR = TroveManager(address(BorrowerOperations(bo).troveManager())).MCR(); 
- 
-            if (ICR < MCR) {
+        // it should not revert
+        try StabilityPool(payable(sp)).provideToSP(tokens, zAddr) {} catch { assert(false); }
+    }
 
-                try BorrowerOperations(bo).troveManager().batchLiquidateTroves(borrowers) {} catch { assert(false); }
-                //(rb,rm) = address(BorrowerOperations(bo).troveManager()).call(abi.encodeWithSignature("batchLiquidateTroves(address[])", borrowers));
-                //assert(rb);
+    function withdrawFromSP_should_not_revert(uint tokens) public {
+        checkInvariants(); 
 
-                // postconditions
-                uint debtAfter;
-                uint stakeAfter;
-                (debtAfter,,stakeAfter,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
-                assert(debtAfter == 0);
-                assert(stakeAfter == 0);
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+        uint deposited = 0;
+        (deposited,) = StabilityPool(payable(sp)).deposits(address(this));
 
-                uint rs1;
-                uint rs2;
-                (rs1,rs2) = TroveManager(address(BorrowerOperations(bo).troveManager())).rewardSnapshots(address(this));
-                assert(rs1 == 0);
-                assert(rs2 == 0); 
-         
-                assert(!ISortedTroves(st).contains(address(this)));
-                assert(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == uint256(TroveManager.Status.closedByLiquidation));
-            }
+        if (deposited == 0) {
+            try StabilityPool(payable(sp)).withdrawFromSP(tokens) { assert(false); } catch {} 
+            return;
         }
 
-        function provideToSP_should_not_revert() public {
-            checkInvariants(); 
-
-            uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-            require(tokens > 0);
-            
-            bool rb = true;
-            bytes memory rm;
-
-            bool registered = false;
-            (, registered) = StabilityPool(payable(sp)).frontEnds(address(this));
-
-            if (registered) {
-                // it should revert if caller is registered
-                (rb,rm) = sp.call(abi.encodeWithSignature("provideToSP(uint256,address)", tokens, address(0x0)));
-                assert(!rb);
+        if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
+            try StabilityPool(payable(sp)).withdrawFromSP(tokens) { assert(false); } catch {} 
+            return;
+        }
+        
+        try StabilityPool(payable(sp)).withdrawFromSP(deposited) {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("StabilityPool: Cannot withdraw while there are troves with ICR < MCR"))
                 return;
-            }
+        } catch { assert(false); }
 
-            // it should revert with more tokens than expected
-            (rb,rm) = sp.call(abi.encodeWithSignature("provideToSP(uint256,address)", tokens+1, address(0x0)));
+        //post conditions
+        // deposited tokens are zero
+        (deposited,) = StabilityPool(payable(sp)).deposits(address(this));
+        assert(deposited == 0);
+
+        // if stabilityPoolBalance is zero, then epochToScaleToG(0, 0) > 0
+        uint stabilityPoolBalance = IStabilityPool(sp).getTotalLUSDDeposits();
+        if (stabilityPoolBalance == 0)
+            assert(StabilityPool(payable(sp)).epochToScaleToG(0, 0) > 0);
+    }
+
+    function withdrawETHGainToTrove_should_not_revert() public {
+        checkInvariants(); 
+        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
+            return; 
+        
+        uint deposited = 0;
+        deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
+
+        if (deposited == 0)
+            return;
+
+        try StabilityPool(payable(sp)).withdrawETHGainToTrove(zAddr, zAddr) {} catch { assert(false); } 
+
+        // post conditions
+        deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
+        assert(deposited == 0);
+    }
+
+function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
+        checkInvariants(); 
+        bool rb = true;
+        bytes memory rm;
+
+        if (BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1) {
+
+            uint colBefore;
+            (,colBefore,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
+            (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", colBefore+1, address(this)));
             assert(!rb);
+            return; 
 
-            // it should not revert
-            (rb,rm) = sp.call(abi.encodeWithSignature("provideToSP(uint256,address)", tokens, address(0x0)));
-            assert(rb);
         }
+    
+        (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", col, address(this)));
+        assert(!rb);
+    }
 
-        function withdrawFromSP_should_not_revert(uint tokens) public {
-            checkInvariants(); 
+    function withdrawColl_should_revert_if_recovery_mode_is_active(uint256 col) public {
+        checkInvariants(); 
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
 
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            bool rb = true;
-            bytes memory rm;
+        if (!BorrowerOperations(bo).troveManager().checkRecoveryMode(price))
+            return; 
+    
+        bool rb = true;
+        bytes memory rm;
 
-            uint deposited = 0;
-            (deposited,) = StabilityPool(payable(sp)).deposits(address(this));
+        (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", col, address(this)));
+        assert(!rb);
+    }
 
-            if (deposited == 0) {
-                (rb,rm) = sp.call(abi.encodeWithSignature("withdrawFromSP(uint256)", tokens));
-                assert(!rb);
+    function redeemCollateral_should_not_revert() public {
+        checkInvariants(); 
+        uint256 _maxFeePercentage = 1000000000000000000;
+        uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        //require(tokens >= 1e18); // no less than 1 LUSD
+        //require(ISortedTroves(st).getSize() >= 2);
+
+        uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
+
+        address frh;
+        uint prhi;
+        (frh, prhi, tokens) = HintHelpers(hh).getRedemptionHints(tokens, price, 0);
+        require(tokens > 0);
+
+        address uprh;
+        address lprh; 
+        (uprh, lprh) = ISortedTroves(st).findInsertPosition(prhi, address(this), address(this));
+     
+        try BorrowerOperations(bo).troveManager().redeemCollateral(tokens, frh, uprh, lprh, prhi, 3, _maxFeePercentage) {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("TroveManager: Unable to redeem any amount"))
                 return;
-            }
+        } catch { assert(false); } 
+    }
 
-            if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
-                (rb,rm) = sp.call(abi.encodeWithSignature("withdrawFromSP(uint256)", tokens));
-                assert(!rb);
-                return;
-            }
+    /*function echidna_optimize_lusd_balance() public returns (int256) {
+        uint self_balance = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
+        //uint other_balance = BorrowerOperations(bo).lusdToken().balanceOf(address(0x111));
+        return int256(self_balance); 
+    }*/
+    
+    event Receive(uint256);
+    event Fallback(uint256);
 
-            (rb,rm) = sp.call(abi.encodeWithSignature("withdrawFromSP(uint256)", deposited));
-            assert(rb);
+    receive() external payable {
+        emit Receive(msg.value);
+        //if (msg.sender == address(0x111)) // We do not want ether from the other account
+        //  revert();
+    }
 
-            //post conditions
-            // deposited tokens are zero
-            (deposited,) = StabilityPool(payable(sp)).deposits(address(this));
-            assert(deposited == 0);
-
-            // if stabilityPoolBalance is zero, then epochToScaleToG(0, 0) > 0
-            uint stabilityPoolBalance = IStabilityPool(sp).getTotalLUSDDeposits();
-            if (stabilityPoolBalance == 0)
-                assert(StabilityPool(payable(sp)).epochToScaleToG(0, 0) > 0);
-        }
-
-        function withdrawETHGainToTrove_should_not_revert() public {
-            checkInvariants(); 
-            if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-                return; 
-           
-            bool rb = true;
-            bytes memory rm;
-
-            uint deposited = 0;
-            deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
-
-            if (deposited == 0)
-                return;
- 
-            (rb,rm) = sp.call(abi.encodeWithSignature("withdrawETHGainToTrove(address)", address(this)));
-            assert(rb);
-
-            // post conditions
-            deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
-            assert(deposited == 0);
-
-        }
-
-	function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
-            checkInvariants(); 
-            bool rb = true;
-            bytes memory rm;
-
-
-            if (BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1) {
-
-                uint colBefore;
-                (,colBefore,,,) = TroveManager(address(BorrowerOperations(bo).troveManager())).Troves(address(this));
-                (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", colBefore+1, address(this)));
-                assert(!rb);
-                return; 
-
-            }
-        
-            (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", col, address(this)));
-            assert(!rb);
-        }
-
-	function withdrawColl_should_revert_if_recovery_mode_is_active(uint256 col) public {
-            checkInvariants(); 
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-
-            if (!BorrowerOperations(bo).troveManager().checkRecoveryMode(price))
-                return; 
-        
-            bool rb = true;
-            bytes memory rm;
-
-            (rb,rm) = bo.call(abi.encodeWithSignature("withdrawColl(uint256,address)", col, address(this)));
-            assert(!rb);
-        }
-
-	/* This test is disabled until AccessControlTest.js is modify to deploy HintHelper
-         function redeemCollateral_should_not_revert() public {
-            checkInvariants(); 
-            uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-            require(tokens >= 1e18); // no less than 1 LUSD
-            require(ISortedTroves(st).getSize() >= 2);
-
-            uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
-            require(price >= 10e18);
-
-            bool rb = true;
-            bytes memory rm;
-
-            address frh;
-            uint prhi;
-            (frh, prhi) = HintHelpers(hh).getRedemptionHints(tokens, price);
-
-            address prh; 
-            (prh,) = ISortedTroves(st).findInsertPosition(prhi, price, address(this), address(this));
-            (rb,rm) = address(BorrowerOperations(bo).troveManager()).call(abi.encodeWithSignature("redeemCollateral(uint256,address,address,uint256,uint256)", tokens, frh, prh, prhi, 3));
-            assert(rb);
-        }*/
-
-        receive() external payable {
-            if (msg.sender == address(0x111)) // We do not want ether from the other account
-              revert();
-        }
-
+    fallback() external payable {
+        emit Fallback(msg.value);
+    }
 }
+
