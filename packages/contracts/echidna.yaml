@@ -1,5 +1,5 @@
 seqLen: 200
-testLimit: 1000
+testLimit: 100000000000
 contractAddr: '0x222'
 sender: ['0x111', '0x222']
 initialize: 'init.json'

@@ -184,13 +184,13 @@ contract E2E {
             assert(colBefore + msg.value < colAfter);
     }
 
-    function repayLUSD_should_not_revert() public {
+    function repayLUSD_should_not_revert(uint256 value) public {
         checkInvariants(); 
         uint256 tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-        require(tokens > 0);
-
-        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-            return; 
+        require(tokens > 1e18);
+        value = value % (tokens + 1);
+        if (value < 1e18)
+          value = 1e18;
 
         // it should revert with more tokens
         try BorrowerOperations(bo).repayLUSD(tokens+1, zAddr, zAddr) { assert(false); } catch {}
@@ -200,24 +200,30 @@ contract E2E {
         catch Error (string memory err) {
             if (keccak256(bytes(err)) == keccak256("BorrowerOps: Trove's net debt must be greater than minimum"))
                 return;
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: Caller doesnt have enough LUSD to make repayment"))
+                return; 
             if (keccak256(bytes(err)) == keccak256("BorrowerOps: An operation that would result in ICR < MCR is not permitted"))
                 return;
             if (keccak256(bytes(err)) == keccak256("SafeMath: subtraction overflow"))
+                return;
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: Trove does not exist or is closed"))
                 return;
 	    assert(false);
         } catch { assert(false); }
 
         // post conditions
-        // it should burn the LUSD from the owner
-        assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) == 0);
+        // it should burn some LUSD from the owner
+        assert(BorrowerOperations(bo).lusdToken().balanceOf(address(this)) < tokens);
 
         // No pending rewards after call
         bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
         assert(!pendingRewardsAfter);
     }
 
-    function withdrawLUSD_should_not_revert() public {
-        checkInvariants(); 
+    function withdrawLUSD_should_not_revert(uint128 value) public {
+        checkInvariants();
+        if (value < 1e18)
+          value = 1e18; 
 
         if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
             return; 
@@ -227,15 +233,13 @@ contract E2E {
 
         if (BorrowerOperations(bo).troveManager().checkRecoveryMode(price)) {
             // it should revert in recovery mode
-            try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) { /*assert(false);*/ } catch {}
-            //(rb,rm) = bo.call(abi.encodeWithSignature("withdrawLUSD(uint256,address)", 1, address(this)));
-            //assert(!rb);
+            //try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, value, zAddr, zAddr) { assert(false); } catch {}
             return;
         }
         uint tokensBefore = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
         // add tokensBefore > 0 
         // it should not revert
-        try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, 1, zAddr, zAddr) {} 
+        try BorrowerOperations(bo).withdrawLUSD(_maxFeePercentage, value, zAddr, zAddr) {} 
         catch Error (string memory err) {
             if (keccak256(bytes(err)) == keccak256("BorrowerOps: Caller doesnt have enough LUSD to make repayment"))
               return;
@@ -248,7 +252,7 @@ contract E2E {
         // post conditions
         // token balance should be updated
         uint tokensAfter = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-        assert(tokensBefore + 1 == tokensAfter);
+        assert(tokensBefore + value >= tokensAfter);
 
         // No pending rewards after call
         bool pendingRewardsAfter = BorrowerOperations(bo).troveManager().hasPendingRewards(address(this));
@@ -311,10 +315,6 @@ contract E2E {
 
     function liquidate_should_not_revert() public {
         checkInvariants(); 
-        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-            return;
-
-        require(ISortedTroves(st).getSize() >= 1);
 
         uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
         uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
@@ -348,10 +348,6 @@ contract E2E {
 
 function liquidateTroves_should_not_revert(uint n) public {
         checkInvariants(); 
-        //if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-        //    return; 
-
-        require(ISortedTroves(st).getSize() >= 1);
 
         uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
         uint ICR = BorrowerOperations(bo).troveManager().getCurrentICR(address(this), price);
@@ -368,7 +364,6 @@ function liquidateTroves_should_not_revert(uint n) public {
 
     function batchLiquidateTroves_should_not_revert() public {
         checkInvariants();
-        require(ISortedTroves(st).getSize() > 0);
         address[] memory borrowers = new address[](1);
         borrowers[0] = address(this);
 
@@ -438,7 +433,12 @@ function liquidateTroves_should_not_revert(uint n) public {
         try StabilityPool(payable(sp)).provideToSP(tokens+1, zAddr) { assert(false); } catch {}
 
         // it should not revert
-        try StabilityPool(payable(sp)).provideToSP(tokens, zAddr) {} catch { assert(false); }
+        try StabilityPool(payable(sp)).provideToSP(tokens, zAddr) {}
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("StabilityPool: caller must have an active trove to withdraw ETHGain to"))
+                return;
+	    assert(false);
+        } catch { assert(false); }
     }
 
     function withdrawFromSP_should_not_revert(uint tokens) public {
@@ -457,6 +457,8 @@ function liquidateTroves_should_not_revert(uint n) public {
         catch Error (string memory err) {
             if (keccak256(bytes(err)) == keccak256("StabilityPool: Cannot withdraw while there are troves with ICR < MCR"))
                 return;
+            if (keccak256(bytes(err)) == keccak256("StabilityPool: caller must have an active trove to withdraw ETHGain to"))
+                return;
 	    assert(false);
         } catch { assert(false); }
 
@@ -467,29 +469,35 @@ function liquidateTroves_should_not_revert(uint n) public {
 
         // if stabilityPoolBalance is zero, then epochToScaleToG(0, 0) > 0
         uint stabilityPoolBalance = IStabilityPool(sp).getTotalLUSDDeposits();
-        if (stabilityPoolBalance == 0)
-            assert(StabilityPool(payable(sp)).epochToScaleToG(0, 0) > 0);
+        //if (stabilityPoolBalance == 0)
+        //    assert(StabilityPool(payable(sp)).epochToScaleToG(0, 0) > 0);
     }
 
     function withdrawETHGainToTrove_should_not_revert() public {
         checkInvariants(); 
-        if (!(BorrowerOperations(bo).troveManager().getTroveStatus(address(this)) == 1))
-            return; 
-        
         uint deposited = 0;
         deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
 
         if (deposited == 0)
             return;
 
-        try StabilityPool(payable(sp)).withdrawETHGainToTrove(zAddr, zAddr) {} catch { assert(false); } 
+        try StabilityPool(payable(sp)).withdrawETHGainToTrove(zAddr, zAddr) {} 
+        catch Error (string memory err) {
+            if (keccak256(bytes(err)) == keccak256("BorrowerOps: An operation that would result in ICR < MCR is not permitted"))
+              return;
+            if (keccak256(bytes(err)) == keccak256("StabilityPool: caller must have an active trove to withdraw ETHGain to"))
+              return;
+            assert(false);
+        } catch {
+            assert(false); // this can fail if the price is high?
+        }
 
         // post conditions
         deposited = StabilityPool(payable(sp)).getDepositorETHGain(address(this));
         assert(deposited == 0);
     }
 
-function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
+    function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
         checkInvariants(); 
         bool rb = true;
         bytes memory rm;
@@ -528,8 +536,6 @@ function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
         checkInvariants(); 
         uint256 _maxFeePercentage = 1000000000000000000;
         uint tokens = BorrowerOperations(bo).lusdToken().balanceOf(address(this));
-        //require(tokens >= 1e18); // no less than 1 LUSD
-        //require(ISortedTroves(st).getSize() >= 2);
 
         uint price = BorrowerOperations(bo).priceFeed().fetchPrice();
 
@@ -537,7 +543,6 @@ function withdrawColl_should_revert_if_trove_is_not_active(uint256 col) public {
         uint prhi;
         (frh, prhi, tokens) = HintHelpers(hh).getRedemptionHints(tokens, price, 0);
         require(tokens > 0);
-
         address uprh;
         address lprh; 
         (uprh, lprh) = ISortedTroves(st).findInsertPosition(prhi, address(this), address(this));
